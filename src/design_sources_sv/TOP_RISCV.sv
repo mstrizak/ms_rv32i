@@ -17,11 +17,14 @@ module TOP_RISCV
    input  logic [31:0] instr_mem_read_i,
    output logic        instr_mem_flush_o,
    output logic        instr_mem_en_o,
+   input  logic        instr_mem_ready_i,   // 0 = IF-stage access outstanding (e.g. I$ miss)
    // Data memory interface
    output logic [31:0] data_mem_address_o,
    input  logic [31:0] data_mem_read_i,
    output logic [31:0] data_mem_write_o,
-   output logic [3:0]  data_mem_we_o
+   output logic [3:0]  data_mem_we_o,
+   output logic        data_mem_en_o,       // 1 = MEM stage has a genuine load/store this cycle
+   input  logic        data_mem_ready_i     // 0 = MEM-stage access outstanding (e.g. D$ miss)
 );
 
    logic       set_a_zero_s;
@@ -43,6 +46,9 @@ module TOP_RISCV
 
    logic       pc_en_s;
    logic       if_id_en_s;
+   logic       id_ex_en_s;
+   logic       ex_mem_en_s;
+   logic       mem_wb_en_s;
 
    // Data_path instance
    data_path data_path_1 (
@@ -76,7 +82,10 @@ module TOP_RISCV
       .id_ex_flush_i       (id_ex_flush_s),
       // control signals for stalling
       .pc_en_i             (pc_en_s),
-      .if_id_en_i          (if_id_en_s)
+      .if_id_en_i          (if_id_en_s),
+      .id_ex_en_i          (id_ex_en_s),
+      .ex_mem_en_i         (ex_mem_en_s),
+      .mem_wb_en_i         (mem_wb_en_s)
    );
 
    // flush current instruction
@@ -109,8 +118,14 @@ module TOP_RISCV
       .if_id_flush_o       (if_id_flush_s),
       .id_ex_flush_o       (id_ex_flush_s),
       // control signals for stalling
+      .instr_mem_ready_i   (instr_mem_ready_i),
+      .data_mem_ready_i    (data_mem_ready_i),
+      .data_mem_en_o       (data_mem_en_o),
       .pc_en_o             (pc_en_s),
-      .if_id_en_o          (if_id_en_s)
+      .if_id_en_o          (if_id_en_s),
+      .id_ex_en_o          (id_ex_en_s),
+      .ex_mem_en_o         (ex_mem_en_s),
+      .mem_wb_en_o         (mem_wb_en_s)
    );
 
    // stall current instruction

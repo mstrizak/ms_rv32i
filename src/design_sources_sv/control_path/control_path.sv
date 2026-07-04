@@ -34,14 +34,29 @@ module control_path
    output logic        if_id_flush_o,
    output logic        id_ex_flush_o,
    // control signals for stalling
+   input  logic        instr_mem_ready_i,   // 0 = IF-stage access outstanding
+   input  logic        data_mem_ready_i,    // 0 = MEM-stage access outstanding
+   output logic        data_mem_en_o,       // 1 = MEM stage has a genuine load/store this cycle
    output logic        pc_en_o,
-   output logic        if_id_en_o
+   output logic        if_id_en_o,
+   output logic        id_ex_en_o,
+   output logic        ex_mem_en_o,
+   output logic        mem_wb_en_o
 );
 
    //********** REGISTER CONTROL ***************
    logic       if_id_en_s;
    logic       if_id_flush_s;
    logic       id_ex_flush_s;
+
+   // raw hazard_unit outputs, arbitrated together with the stall inputs by stall_unit
+   logic       hazard_pc_en_s;
+   logic       hazard_if_id_en_s;
+   logic       hazard_control_pass_s;
+   logic       data_mem_access_s;
+   logic       id_ex_en_s;
+   logic       ex_mem_en_s;
+   logic       mem_wb_en_s;
 
    //*********  INSTRUCTION DECODE **************
    logic [1:0] branch_type_id_s;
@@ -147,9 +162,14 @@ module control_path
    //*********** Sequential logic ******************
 
    // ID/EX register
+   // reset is checked before the id_ex_en_s hold gate so a reset can never
+   // be masked by an in-progress mem_stall (see stall_unit.sv); when
+   // id_ex_en_s is low (mem_stall), neither branch below executes and the
+   // register holds -- a same-cycle bubble/flush request is simply
+   // re-evaluated once unstalled.
    always_ff @(posedge clk) begin : id_ex
       if (ce == 1'b1) begin
-         if (reset == 1'b0 || control_pass_s == 1'b0 || id_ex_flush_s == 1'b1) begin
+         if (reset == 1'b0) begin
             branch_type_ex_s <= '0;
             funct3_ex_s      <= '0;
             funct7_ex_s      <= '0;
@@ -164,25 +184,43 @@ module control_path
             rd_we_ex_s       <= 1'b0;
             data_mem_we_ex_s <= 1'b0;
          end
-         else begin
-            branch_type_ex_s <= branch_type_id_s;
-            funct7_ex_s      <= funct7_id_s;
-            funct3_ex_s      <= funct3_id_s;
-            set_a_zero_ex_s  <= set_a_zero_id_s;
-            alu_src_a_ex_s   <= alu_src_a_id_s;
-            alu_src_b_ex_s   <= alu_src_b_id_s;
-            mem_to_reg_ex_s  <= mem_to_reg_id_s;
-            alu_2bit_op_ex_s <= alu_2bit_op_id_s;
-            rs1_address_ex_s <= rs1_address_id_s;
-            rs2_address_ex_s <= rs2_address_id_s;
-            rd_address_ex_s  <= rd_address_id_s;
-            rd_we_ex_s       <= rd_we_id_s;
-            data_mem_we_ex_s <= data_mem_we_id_s;
+         else if (id_ex_en_s == 1'b1) begin
+            if (control_pass_s == 1'b0 || id_ex_flush_s == 1'b1) begin
+               branch_type_ex_s <= '0;
+               funct3_ex_s      <= '0;
+               funct7_ex_s      <= '0;
+               set_a_zero_ex_s  <= 1'b0;
+               alu_src_a_ex_s   <= 1'b0;
+               alu_src_b_ex_s   <= 1'b0;
+               mem_to_reg_ex_s  <= '0;
+               alu_2bit_op_ex_s <= '0;
+               rs1_address_ex_s <= '0;
+               rs2_address_ex_s <= '0;
+               rd_address_ex_s  <= '0;
+               rd_we_ex_s       <= 1'b0;
+               data_mem_we_ex_s <= 1'b0;
+            end
+            else begin
+               branch_type_ex_s <= branch_type_id_s;
+               funct7_ex_s      <= funct7_id_s;
+               funct3_ex_s      <= funct3_id_s;
+               set_a_zero_ex_s  <= set_a_zero_id_s;
+               alu_src_a_ex_s   <= alu_src_a_id_s;
+               alu_src_b_ex_s   <= alu_src_b_id_s;
+               mem_to_reg_ex_s  <= mem_to_reg_id_s;
+               alu_2bit_op_ex_s <= alu_2bit_op_id_s;
+               rs1_address_ex_s <= rs1_address_id_s;
+               rs2_address_ex_s <= rs2_address_id_s;
+               rd_address_ex_s  <= rd_address_id_s;
+               rd_we_ex_s       <= rd_we_id_s;
+               data_mem_we_ex_s <= data_mem_we_id_s;
+            end
          end
+         // else: id_ex_en_s == 0 -> hold (mem_stall in progress)
       end
    end
 
-   // EX/MEM register
+   // EX/MEM register (reset checked before the new ex_mem_en_s hold gate)
    always_ff @(posedge clk) begin : ex_mem
       if (ce == 1'b1) begin
          if (reset == 1'b0) begin
@@ -192,17 +230,18 @@ module control_path
             mem_to_reg_mem_s  <= '0;
             rd_address_mem_s  <= '0;
          end
-         else begin
+         else if (ex_mem_en_s == 1'b1) begin
             funct3_mem_s      <= funct3_ex_s;
             data_mem_we_mem_s <= data_mem_we_ex_s;
             rd_we_mem_s       <= rd_we_ex_s;
             mem_to_reg_mem_s  <= mem_to_reg_ex_s;
             rd_address_mem_s  <= rd_address_ex_s;
          end
+         // else: ex_mem_en_s == 0 -> hold (mem_stall in progress)
       end
    end
 
-   // MEM/WB register
+   // MEM/WB register (reset checked before the new mem_wb_en_s hold gate)
    always_ff @(posedge clk) begin : mem_wb
       if (ce == 1'b1) begin
          if (reset == 1'b0) begin
@@ -211,12 +250,13 @@ module control_path
             mem_to_reg_wb_s <= '0;
             rd_address_wb_s <= '0;
          end
-         else begin
+         else if (mem_wb_en_s == 1'b1) begin
             funct3_wb_s     <= funct3_mem_s;
             rd_we_wb_s      <= rd_we_mem_s;
             mem_to_reg_wb_s <= mem_to_reg_mem_s;
             rd_address_wb_s <= rd_address_mem_s;
          end
+         // else: mem_wb_en_s == 0 -> hold (mem_stall in progress)
       end
    end
 
@@ -267,15 +307,39 @@ module control_path
       .rd_address_ex_i  (rd_address_ex_s),
       .mem_to_reg_ex_i  (mem_to_reg_ex_s),
 
-      .pc_en_o          (pc_en_o),
-      .if_id_en_o       (if_id_en_s),
-      .control_pass_o   (control_pass_s)
+      .pc_en_o          (hazard_pc_en_s),
+      .if_id_en_o       (hazard_if_id_en_s),
+      .control_pass_o   (hazard_control_pass_s)
+   );
+
+   // MEM-stage instruction is a genuine load/store this cycle
+   assign data_mem_access_s = data_mem_we_mem_s | (mem_to_reg_mem_s == 2'b10);
+
+   // Stall unit: combines the load-use hazard stall (above) with the
+   // external I$/D$ ready signals into the final pipeline enables
+   stall_unit stall_u (
+      .hazard_pc_en_i        (hazard_pc_en_s),
+      .hazard_if_id_en_i     (hazard_if_id_en_s),
+      .hazard_control_pass_i (hazard_control_pass_s),
+      .instr_mem_ready_i     (instr_mem_ready_i),
+      .data_mem_ready_i      (data_mem_ready_i),
+      .data_mem_access_i     (data_mem_access_s),
+      .pc_en_o               (pc_en_o),
+      .if_id_en_o            (if_id_en_s),
+      .control_pass_o        (control_pass_s),
+      .id_ex_en_o            (id_ex_en_s),
+      .ex_mem_en_o           (ex_mem_en_s),
+      .mem_wb_en_o           (mem_wb_en_s)
    );
 
    //********** Outputs **************
 
    // forward control signals to datapath
    assign if_id_en_o    = if_id_en_s;
+   assign id_ex_en_o    = id_ex_en_s;
+   assign ex_mem_en_o   = ex_mem_en_s;
+   assign mem_wb_en_o   = mem_wb_en_s;
+   assign data_mem_en_o = data_mem_access_s;
    assign mem_to_reg_o  = mem_to_reg_wb_s;
    assign alu_src_b_o   = alu_src_b_ex_s;
    assign alu_src_a_o   = alu_src_a_ex_s;

@@ -37,7 +37,10 @@ module data_path
    input  logic        id_ex_flush_i,
    // control signals for stalling
    input  logic        pc_en_i,
-   input  logic        if_id_en_i
+   input  logic        if_id_en_i,
+   input  logic        id_ex_en_i,
+   input  logic        ex_mem_en_i,
+   input  logic        mem_wb_en_i
 );
 
    //*********  INSTRUCTION FETCH  **************
@@ -108,27 +111,38 @@ module data_path
       end
    end
 
-   // ID/EX register
+   // ID/EX register (reset checked before the new id_ex_en_i hold gate,
+   // same convention as control_path's matching shadow register)
    always_ff @(posedge clk) begin : id_ex
       if (ce == 1'b1) begin
-         if (reset == 1'b0 || id_ex_flush_i == 1'b1) begin
+         if (reset == 1'b0) begin
             pc_adder_ex_s           <= '0;
             rs1_data_ex_s           <= '0;
             rs2_data_ex_s           <= '0;
             immediate_extended_ex_s <= '0;
             rd_address_ex_s         <= '0;
          end
-         else begin
-            pc_adder_ex_s           <= pc_adder_id_s;
-            rs1_data_ex_s           <= rs1_data_id_s;
-            rs2_data_ex_s           <= rs2_data_id_s;
-            immediate_extended_ex_s <= immediate_extended_id_s;
-            rd_address_ex_s         <= rd_address_id_s;
+         else if (id_ex_en_i == 1'b1) begin
+            if (id_ex_flush_i == 1'b1) begin
+               pc_adder_ex_s           <= '0;
+               rs1_data_ex_s           <= '0;
+               rs2_data_ex_s           <= '0;
+               immediate_extended_ex_s <= '0;
+               rd_address_ex_s         <= '0;
+            end
+            else begin
+               pc_adder_ex_s           <= pc_adder_id_s;
+               rs1_data_ex_s           <= rs1_data_id_s;
+               rs2_data_ex_s           <= rs2_data_id_s;
+               immediate_extended_ex_s <= immediate_extended_id_s;
+               rd_address_ex_s         <= rd_address_id_s;
+            end
          end
+         // else: id_ex_en_i == 0 -> hold (mem_stall in progress)
       end
    end
 
-   // EX/MEM register
+   // EX/MEM register (reset checked before the new ex_mem_en_i hold gate)
    always_ff @(posedge clk) begin : ex_mem
       if (ce == 1'b1) begin
          if (reset == 1'b0) begin
@@ -138,17 +152,18 @@ module data_path
             rd_address_mem_s <= '0;
             pc_reg_ex_s      <= '0;
          end
-         else begin
+         else if (ex_mem_en_i == 1'b1) begin
             alu_result_mem_s <= alu_result_ex_s;
             rs2_data_mem_s   <= alu_forward_b_ex_s;
             pc_adder_mem_s   <= pc_adder_ex_s;
             rd_address_mem_s <= rd_address_ex_s;
             pc_reg_ex_s      <= pc_reg_id_s;
          end
+         // else: ex_mem_en_i == 0 -> hold (mem_stall in progress)
       end
    end
 
-   // MEM/WB register
+   // MEM/WB register (reset checked before the new mem_wb_en_i hold gate)
    always_ff @(posedge clk) begin : mem_wb
       if (ce == 1'b1) begin
          if (reset == 1'b0) begin
@@ -156,11 +171,12 @@ module data_path
             pc_adder_wb_s   <= '0;
             rd_address_wb_s <= '0;
          end
-         else begin
+         else if (mem_wb_en_i == 1'b1) begin
             alu_result_wb_s <= alu_result_mem_s;
             pc_adder_wb_s   <= pc_adder_mem_s;
             rd_address_wb_s <= rd_address_mem_s;
          end
+         // else: mem_wb_en_i == 0 -> hold (mem_stall in progress)
       end
    end
 
