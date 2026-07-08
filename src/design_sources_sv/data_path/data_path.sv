@@ -79,6 +79,8 @@ module data_path
    //*********      WRITEBACK      **************
    logic [31:0] pc_adder_wb_s;
    logic [31:0] alu_result_wb_s;
+   logic [31:0] data_mem_read_wb_s;
+   logic [31:0] extended_data_src_s;
    logic [31:0] extended_data_wb_s;
    logic [31:0] rd_data_wb_s;
    logic [4:0]  rd_address_wb_s;
@@ -180,6 +182,37 @@ module data_path
       end
    end
 
+   // data_mem_read_i is a LIVE, shared bus: it is only guaranteed to show
+   // the correct value for the instruction currently entering WB during the
+   // one cycle mem_wb_en_i was 1 the PREVIOUS cycle (mem_wb_en_i itself, by
+   // the time that data becomes valid, has typically already flipped to 0
+   // for an unrelated, younger instruction's D-cache miss now sitting in
+   // MEM -- the two events land on the same edge). So: on that one fresh
+   // cycle (mem_wb_en_d1_s), read the live bus AND latch it; on every
+   // subsequent frozen cycle, keep using the latched copy instead of the
+   // live bus, which by then belongs to a different, still-in-flight
+   // access. Without this, register_bank_1's repeated (otherwise harmless)
+   // re-write during a stall would silently corrupt the load's result with
+   // whatever the unrelated access's traffic currently shows.
+   logic mem_wb_en_d1_s;
+   always_ff @(posedge clk) begin
+      if (reset == 1'b0)
+         mem_wb_en_d1_s <= 1'b0;
+      else
+         mem_wb_en_d1_s <= mem_wb_en_i;
+   end
+
+   always_ff @(posedge clk) begin
+      if (reset == 1'b0)
+         data_mem_read_wb_s <= '0;
+      else if (mem_wb_en_d1_s == 1'b1)
+         data_mem_read_wb_s <= data_mem_read_i;
+      // else: hold -- WB has been stuck on the same instruction for more
+      // than one cycle; the live bus no longer belongs to it.
+   end
+
+   assign extended_data_src_s = mem_wb_en_d1_s ? data_mem_read_i : data_mem_read_wb_s;
+
    //***********  Combinational logic  ***************
 
    // pc_adder_s update
@@ -221,14 +254,15 @@ module data_path
       endcase
    end
 
-   // extend data based on type of load instruction
+   // extend data based on type of load instruction (off extended_data_src_s
+   // -- live bus on WB's one fresh cycle, latched copy afterward; see mem_wb above)
    always_comb begin
       case (load_type_i)
-         3'b000:  extended_data_wb_s = {{24{data_mem_read_i[7]}},  data_mem_read_i[7:0]};   // lb
-         3'b001:  extended_data_wb_s = {{16{data_mem_read_i[15]}}, data_mem_read_i[15:0]};  // lh
-         3'b100:  extended_data_wb_s = {24'd0, data_mem_read_i[7:0]};                       // lbu
-         3'b101:  extended_data_wb_s = {16'd0, data_mem_read_i[15:0]};                      // lhu
-         default: extended_data_wb_s = data_mem_read_i;                                     // lw
+         3'b000:  extended_data_wb_s = {{24{extended_data_src_s[7]}},  extended_data_src_s[7:0]};   // lb
+         3'b001:  extended_data_wb_s = {{16{extended_data_src_s[15]}}, extended_data_src_s[15:0]};  // lh
+         3'b100:  extended_data_wb_s = {24'd0, extended_data_src_s[7:0]};                           // lbu
+         3'b101:  extended_data_wb_s = {16'd0, extended_data_src_s[15:0]};                          // lhu
+         default: extended_data_wb_s = extended_data_src_s;                                         // lw
       endcase
    end
 

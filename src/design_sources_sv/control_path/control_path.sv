@@ -54,6 +54,7 @@ module control_path
    logic       hazard_if_id_en_s;
    logic       hazard_control_pass_s;
    logic       data_mem_access_s;
+   logic       redirect_s;
    logic       id_ex_en_s;
    logic       ex_mem_en_s;
    logic       mem_wb_en_s;
@@ -315,6 +316,10 @@ module control_path
    // MEM-stage instruction is a genuine load/store this cycle
    assign data_mem_access_s = data_mem_we_mem_s | (mem_to_reg_mem_s == 2'b10);
 
+   // A taken branch/jump this cycle must override an in-progress I$ miss
+   // (see stall_unit.sv) or the redirect can be silently dropped
+   assign redirect_s = if_id_flush_s | id_ex_flush_s;
+
    // Stall unit: combines the load-use hazard stall (above) with the
    // external I$/D$ ready signals into the final pipeline enables
    stall_unit stall_u (
@@ -324,6 +329,7 @@ module control_path
       .instr_mem_ready_i     (instr_mem_ready_i),
       .data_mem_ready_i      (data_mem_ready_i),
       .data_mem_access_i     (data_mem_access_s),
+      .redirect_i            (redirect_s),
       .pc_en_o               (pc_en_o),
       .if_id_en_o            (if_id_en_s),
       .control_pass_o        (control_pass_s),
